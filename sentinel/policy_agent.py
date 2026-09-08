@@ -12,4 +12,9 @@ class PolicyAgent(BaseAgent):
         policy = {'policy_version':'2026-09-01','max_adjustment_minor':200000,'currency':'INR','human_required':True,'simulation_only':True}
         yield Event(author=self.name,content=types.Content(role='model',parts=[types.Part(text=json.dumps(policy))]))
 root_agent = PolicyAgent(name='policy_specialist',description='Return the authoritative simulated settlement adjustment policy in JSON. No funds are moved.')
-app = to_a2a(root_agent, host=os.getenv('A2A_HOST','localhost'),port=int(os.getenv('A2A_PORT','8001')))
+app = to_a2a(
+    root_agent,
+    host=os.getenv('A2A_CARD_HOST',os.getenv('A2A_HOST','localhost')),
+    port=int(os.getenv('A2A_CARD_PORT',os.getenv('A2A_PORT','8001'))),
+    protocol=os.getenv('A2A_CARD_PROTOCOL','http'),
+)

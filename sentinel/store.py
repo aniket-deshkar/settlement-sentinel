@@ -17,7 +17,12 @@ class Store:
     def connect(self):
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
+        db.execute('PRAGMA foreign_keys=ON')
+        db.execute('PRAGMA busy_timeout=10000')
         return db
+    def ping(self):
+        with self.connect() as db:
+            db.execute('SELECT 1').fetchone()
     def create(self, case):
         with self.connect() as db:
             db.execute('INSERT INTO cases VALUES(?,?,?,?)', (case['id'], 'investigating', 1, json.dumps(case)))
@@ -25,6 +30,7 @@ class Store:
     def finish(self, id, result, state='awaiting_approval'):
         with self.connect() as db:
             row = db.execute('SELECT payload FROM cases WHERE id=?',(id,)).fetchone()
+            if not row: raise KeyError(id)
             case = json.loads(row[0]); case.update(result)
             db.execute('UPDATE cases SET payload=?, state=?, version=version+1 WHERE id=?',(json.dumps(case),state,id))
             db.execute('INSERT INTO audit(case_id,event,actor,at) VALUES(?,?,?,?)',(id,state,'workflow',time.time()))
@@ -41,6 +47,7 @@ class Store:
         with self.connect() as db: ids = [r[0] for r in db.execute('SELECT id FROM cases ORDER BY rowid DESC LIMIT 50')]
         return [self.get(id) for id in ids]
     def decide(self, id, version, decision, actor):
+        expired = False
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT * FROM cases WHERE id=?',(id,)).fetchone()
@@ -48,12 +55,17 @@ class Store:
             if row['state'] != 'awaiting_approval' or row['version'] != version:
                 raise ValueError('Stale or already reviewed proposal. Refresh the case.')
             case = json.loads(row['payload'])
-            if time.time() > case['expires_at']: raise ValueError('Proposal expired. Start a new investigation.')
-            state = 'rejected'
-            if decision == 'approve':
-                if not case['eligible']: raise ValueError('Policy blocks this adjustment.')
-                db.execute('INSERT INTO ledger VALUES(?,?,?)',(id,case['adjustment_minor'],case['currency']))
-                state = 'executed_simulation'
+            if time.time() > case['expires_at']:
+                state = 'expired'
+                expired = True
+            else:
+                state = 'rejected'
+                if decision == 'approve':
+                    if not case['eligible']: raise ValueError('Policy blocks this adjustment.')
+                    db.execute('INSERT INTO ledger VALUES(?,?,?)',(id,case['adjustment_minor'],case['currency']))
+                    state = 'executed_simulation'
             db.execute('UPDATE cases SET state=?,version=version+1 WHERE id=?',(state,id))
             db.execute('INSERT INTO audit(case_id,event,actor,at) VALUES(?,?,?,?)',(id,state,actor,time.time()))
+        if expired:
+            raise ValueError('Proposal expired. Start a new investigation.')
         return self.get(id)

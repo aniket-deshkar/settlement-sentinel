@@ -40,3 +40,30 @@ def test_adk_workflow_uses_mcp_and_a2a(monkeypatch):
     assert result["adjustment_minor"] == 1500
     assert result["evidence"]["reference"] == "processor-batch-042"
     assert any(event["agent"] == "remote_policy" for event in result["timeline"])
+
+
+def test_high_value_proposal_is_blocked(monkeypatch):
+    port = free_port()
+    env = os.environ | {"A2A_HOST": "127.0.0.1", "A2A_PORT": str(port), "A2A_URL": f"http://127.0.0.1:{port}", "NO_PROXY": "127.0.0.1,localhost"}
+    root = Path(__file__).resolve().parents[1]
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "sentinel.policy_agent:app", "--host", "127.0.0.1", "--port", str(port)], cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=.2):
+                    break
+            except OSError:
+                time.sleep(.1)
+        else:
+            raise AssertionError("A2A policy server did not start")
+        monkeypatch.setenv("A2A_URL", env["A2A_URL"])
+        monkeypatch.setenv("MODEL_MODE", "demo")
+        from sentinel.workflow import investigate
+        result = asyncio.run(investigate("high-value-case", "high_value"))
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
+
+    assert result["eligible"] is False
+    assert result["adjustment_minor"] == 8_000_000

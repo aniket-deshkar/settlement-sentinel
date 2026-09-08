@@ -9,7 +9,16 @@ COPY pyproject.toml uv.lock README.md ./
 RUN pip install --no-cache-dir "uv>=0.8" && uv sync --frozen --no-dev --no-install-project
 
 COPY sentinel ./sentinel
+COPY scripts/start-container.sh ./scripts/start-container.sh
 RUN uv sync --frozen --no-dev
 
+RUN addgroup --system sentinel \
+    && adduser --system --ingroup sentinel sentinel \
+    && mkdir -p /app/data \
+    && chown -R sentinel:sentinel /app/data \
+    && chmod +x /app/scripts/start-container.sh
+
+USER sentinel
+
 EXPOSE 8080
-CMD ["uvicorn", "sentinel.api:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["./scripts/start-container.sh"]

@@ -1,7 +1,10 @@
 .git
+.github
 .venv
-.pytest_cache
 __pycache__
+*.py[cod]
+.pytest_cache
 data
+dist
 tests
 .env

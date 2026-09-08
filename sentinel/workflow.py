@@ -2,7 +2,10 @@ import json
 import os
 import sys
 import time
+from typing import Literal
+
 import httpx
+from pydantic import BaseModel, ConfigDict, Field
 from google.adk.agents import BaseAgent, LlmAgent, SequentialAgent
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.events import Event, EventActions
@@ -17,6 +20,24 @@ from mcp.client.stdio import stdio_client
 from .telemetry import tracer
 
 PARAMS = StdioServerParameters(command=sys.executable,args=['-m','sentinel.mcp_server'])
+
+class Evidence(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    payment_id: str = Field(min_length=1, max_length=80)
+    expected_minor: int = Field(ge=0, le=1_000_000_000)
+    settled_minor: int = Field(ge=0, le=1_000_000_000)
+    currency: str = Field(pattern=r'^[A-Z]{3}$')
+    reason: str = Field(min_length=1, max_length=300)
+    reference: str = Field(min_length=1, max_length=120)
+
+class Policy(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    policy_version: str = Field(min_length=1, max_length=80)
+    max_adjustment_minor: int = Field(ge=0, le=200_000)
+    currency: Literal['INR']
+    human_required: Literal[True]
+    simulation_only: Literal[True]
+
 def event(name,text,delta=None):
     return Event(author=name,content=types.Content(role='model',parts=[types.Part(text=text)]),actions=EventActions(state_delta=delta or {}))
 
@@ -28,7 +49,8 @@ class EvidenceAgent(BaseAgent):
                     await client.initialize()
                     result = await client.call_tool('get_settlement',{'scenario':ctx.session.state['scenario']})
                     if result.isError: raise RuntimeError('MCP evidence rejected')
-                    data = json.loads(next(p.text for p in result.content if p.type=='text'))
+                    raw = json.loads(next(p.text for p in result.content if p.type=='text'))
+                    data = Evidence.model_validate(raw).model_dump()
         yield event(self.name,json.dumps(data),{'evidence':data})
 
 class DemoAnalyst(BaseAgent):
@@ -48,11 +70,7 @@ class PolicyBridge(BaseAgent):
                 yield e
         if not final:
             raise RuntimeError('Remote policy agent returned no policy payload')
-        policy = json.loads(final)
-        if policy.get('human_required') is not True or policy.get('simulation_only') is not True:
-            raise ValueError('Unsafe policy response')
-        if type(policy.get('max_adjustment_minor')) is not int or not 0 <= policy['max_adjustment_minor'] <= 200000:
-            raise ValueError('Policy limit outside local ceiling')
+        policy = Policy.model_validate_json(final).model_dump()
         yield event(self.name,'Verified remote policy '+policy['policy_version'],{'policy':policy})
 
 class ProposalAgent(BaseAgent):
@@ -75,7 +93,7 @@ async def investigate(case_id,scenario):
     # The policy service is local in the learning PoC; do not route its Agent
     # Card or A2A messages through a developer machine's ambient proxy settings.
     a2a_client = httpx.AsyncClient(trust_env=False)
-    remote = RemoteA2aAgent(name='remote_policy',agent_card=os.getenv('A2A_URL','http://localhost:8001')+'/.well-known/agent-card.json',httpx_client=a2a_client,timeout=20)
+    remote = RemoteA2aAgent(name='remote_policy',agent_card=os.getenv('A2A_URL','http://localhost:8001').rstrip('/')+'/.well-known/agent-card.json',httpx_client=a2a_client,timeout=20)
     workflow = SequentialAgent(name='settlement_workflow',sub_agents=[EvidenceAgent(name='evidence_agent'),analyst,PolicyBridge(name='policy_bridge',sub_agents=[remote]),ProposalAgent(name='proposal_agent')])
     sessions = InMemorySessionService()
     await sessions.create_session(app_name='sentinel',user_id='operator',session_id=case_id,state={'scenario':scenario})

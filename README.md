@@ -2,6 +2,8 @@
 
 **A governed, synthetic settlement-investigation system built with Google ADK, Gemini, MCP, A2A, FastAPI, human approval, and OpenTelemetry.**
 
+[![CI](https://github.com/aniket-deshkar/settlement-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/aniket-deshkar/settlement-sentinel/actions/workflows/ci.yml)
+
 Settlement Sentinel investigates a mismatch between expected and processor-settled amounts, assembles evidence, asks a separately deployed policy specialist for its rules through A2A, and produces a bounded **simulated** adjustment proposal. A reviewer must approve or reject it. The application never connects to a payment provider and never moves funds.
 
 The repository is ready to productionize: its agent boundaries, approval contract, persistence boundary, metrics and deployment model are explicit. The [production gates](#production-gates) must be completed before handling real payment data or actions.
@@ -19,7 +21,7 @@ It demonstrates the parts of an agentic system that are often omitted from simpl
 | Multi-agent workflow | Evidence → analyst → remote policy → proposal, with a persisted timeline. |
 | FastAPI | Typed, role-separated APIs and a lightweight operator UI. |
 | Human approval | Expiring, versioned decision with a single atomic simulated-ledger write. |
-| Observability | OpenTelemetry spans, correlation trace IDs, Prometheus metrics, and immutable audit events. |
+| Observability | OpenTelemetry spans, correlation trace IDs, Prometheus metrics, and application-level append-only audit events. |
 
 ## Architecture
 
@@ -53,28 +55,46 @@ The model cannot access database mutation tools, reviewer credentials, real paym
 
 ## Quick start
 
-### 1. Create the environment
+### macOS or Linux
 
 ```bash
 uv sync --extra dev
 cp .env.example .env
-```
-
-The default `.env.example` uses `MODEL_MODE=demo`: it runs MCP and A2A locally and has **zero Gemini API calls**.
-
-### 2. Run both services
-
-```bash
 set -a; source .env; set +a
 PYTHON=.venv/bin/python ./scripts/run-local.sh
 ```
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The demo UI initially uses the sample tokens from `.env.example`.
 
-### 3. Run tests
+### Windows 11 PowerShell (native, no WSL or Docker)
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), clone the repository, then run:
+
+```powershell
+uv sync --extra dev
+Copy-Item .env.example .env
+```
+
+Open two PowerShell windows in the repository. The checked-in demo defaults already match the UI.
+
+Policy service:
+
+```powershell
+uv run uvicorn sentinel.policy_agent:app --env-file .env --host 127.0.0.1 --port 8001
+```
+
+API and UI:
+
+```powershell
+uv run uvicorn sentinel.api:app --env-file .env --host 127.0.0.1 --port 8000
+```
+
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Demo mode runs MCP and A2A locally and makes **zero Gemini API calls**.
+
+### Run tests
 
 ```bash
-.venv/bin/python -m pytest
+uv run pytest
 ```
 
 The integration test starts an A2A policy process and verifies a real local chain: MCP evidence retrieval, Google ADK orchestration, and A2A policy exchange.
@@ -102,9 +122,10 @@ All `/api` and `/metrics` routes use a bearer credential.
 | `GET /api/cases/{id}` | Operator | Retrieve a case, audit trail, timeline and trace ID. |
 | `POST /api/cases/{id}/decision` | Reviewer | Approve or reject a matching case version. |
 | `GET /metrics` | Operator | Prometheus metrics. |
-| `GET /health` | Public | Liveness and active model mode. |
+| `GET /health` | Public | Process liveness and active model mode. |
+| `GET /ready` | Public | Database and A2A policy-service readiness. |
 
-Use separate operator and reviewer credentials. The application refuses to start in `APP_ENV=production` if its configured tokens are defaults or identical.
+Use separate operator and reviewer credentials. The application refuses to start in `APP_ENV=production` if its configured tokens are defaults, identical, or shorter than 24 characters.
 
 ## Observability
 
@@ -112,13 +133,16 @@ Use separate operator and reviewer credentials. The application refuses to start
 - Each finished case exposes its `trace_id` and event timeline in the UI and API.
 - `/metrics` publishes `sentinel_runs_total`, `sentinel_run_seconds`, and `sentinel_decisions_total`.
 - Set `OTEL_CONSOLE=1` locally to emit spans to stdout. In production, configure an authenticated OTLP exporter and include deployment, tenant, and correlation attributes.
+- The CI workflow runs the unit tests, live local MCP/A2A integration tests, and package build for every push and pull request to `main`.
 
 ## Production deployment shape
 
 Deploy two separate Cloud Run services in the same region:
 
-- `sentinel-policy`: the A2A policy specialist.
-- `sentinel-api`: FastAPI, the UI, and API routes. Configure `A2A_URL` with the policy service’s authenticated internal URL.
+- `sentinel-policy`: set `SERVICE_ROLE=policy`, and configure `A2A_CARD_HOST`, `A2A_CARD_PORT=443`, and `A2A_CARD_PROTOCOL=https` for its externally advertised Agent Card URL.
+- `sentinel-api`: use the default `SERVICE_ROLE=api`. Configure `A2A_URL` with the policy service’s authenticated internal URL.
+
+The same non-root container image supports both roles. Cloud Run supplies `PORT`; `scripts/start-container.sh` binds the selected service to it. Use `/health` as the API liveness probe and `/ready` as its readiness probe.
 
 Cloud Run has an always-free allowance under its current pricing model, but Cloud billing must be enabled and usage above the allowance is billable. Review the current [Cloud Run pricing](https://cloud.google.com/run/pricing) and [Google Cloud Free Tier](https://cloud.google.com/free) before deployment.
 
@@ -133,6 +157,7 @@ Cloud Run has an always-free allowance under its current pricing model, but Clou
 - Add an idempotency key and outbox/inbox workflow before any real provider integration. Keep a separate privileged execution service that revalidates canonical intent at execution time.
 - Add encryption, tenant isolation, PII redaction, retention/deletion controls, threat modelling, load tests, SLOs, backup/restore drills and incident runbooks.
 - Evaluate Gemini prompts/tool use with fixture cases, adversarial prompt-injection cases, policy-conformance tests and cost limits.
+- Track the ADK release notes: the current ADK `RemoteA2aAgent` implementation is marked experimental and `SequentialAgent` is deprecated in favor of the newer Workflow API. The dependency is upper-bounded and locked; migrate after the replacement API is stable for this agent composition.
 
 ## Project layout
 
