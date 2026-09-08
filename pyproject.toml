@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "settlement-sentinel"
+version = "1.0.0"
+description = "A governed, synthetic settlement-investigation PoC using Google ADK, Gemini, MCP, A2A and FastAPI."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "google-adk[a2a]>=2.8,<3",
+  "httpx>=0.28,<1",
+  "mcp>=1.30,<2",
+  "opentelemetry-sdk>=1.42,<2",
+  "prometheus-client>=0.26,<1",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sentinel"]
