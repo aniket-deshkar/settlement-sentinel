@@ -6,6 +6,12 @@
 
 Settlement Sentinel investigates a mismatch between expected and processor-settled amounts, assembles evidence, asks a separately deployed policy specialist for its rules through A2A, and produces a bounded **simulated** adjustment proposal. A reviewer must approve or reject it. The application never connects to a payment provider and never moves funds.
 
+## UI snapshot
+
+![Settlement Sentinel investigation console](docs/images/settlement-sentinel-ui.jpg)
+
+Explore the hosted synthetic demo: [Settlement Sentinel](https://settlement-sentinel-lab.aniketdeshkar24.chatgpt.site).
+
 The repository is ready to productionize: its agent boundaries, approval contract, persistence boundary, metrics and deployment model are explicit. The [production gates](#production-gates) must be completed before handling real payment data or actions.
 
 ## Why this project matters
